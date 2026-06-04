@@ -24,7 +24,7 @@ import com.spotify.scio.smb.SmbIO
 import com.spotify.scio.testing.TestDataManager
 import com.spotify.scio.values._
 import org.apache.beam.sdk.coders.KvCoder
-import org.apache.beam.sdk.extensions.smb.{SortedBucketIO, SortedBucketIOUtil}
+import org.apache.beam.sdk.extensions.smb.{MapSideSortedBucketSink, SortedBucketIO, SortedBucketIOUtil}
 import org.apache.beam.sdk.values.KV
 
 trait SortMergeBucketSCollectionSyntax {
@@ -49,6 +49,45 @@ final class SortedBucketSCollection[T](private val self: SCollection[T]) {
    *   the [[PTransform]] that applies a [[SortedBucketSink]] transform to the input data. It
    *   contains information about key function, bucket and shard size, etc.
    */
+  /**
+   * Save an `SCollection[T]` using map-side bucket writes, eliminating the GroupByKey shuffle.
+   * Each worker locally partitions, sorts, and writes its own data to shard files.
+   *
+   * The output is standard SMB format, fully compatible with existing `sortMergeJoin` readers.
+   * Use this when the shuffle cost of `saveAsSortedBucket` is a bottleneck.
+   *
+   * @param write
+   *   the [[SortedBucketIO.Write]] configuration. Its `BucketMetadata` must have `numShards`
+   *   matching the `numShards` parameter.
+   * @param numShards
+   *   the number of shards per bucket. Each worker writes to one shard. Lower values produce
+   *   fewer files but more merge work during finalization. Recommended: 5-10.
+   */
+  @experimental
+  def saveAsMapSideSortedBucket(
+    write: SortedBucketIO.Write[_, _, T],
+    numShards: Int = 5
+  ): ClosedTap[T] = {
+    import self.coder
+
+    if (self.context.isTest) {
+      TestDataManager.getOutput(self.context.testId.get)(SortedBucketIOUtil.testId(write))(self)
+      ClosedTap(TapOf[T].saveForTest(self))
+    } else {
+      val tmpDir = write.getTempDirectoryOrDefault(self.context.pipeline)
+      val sink = new MapSideSortedBucketSink[Any, Any, T](
+        write.getBucketMetadata.asInstanceOf[org.apache.beam.sdk.extensions.smb.BucketMetadata[Any, Any, T]],
+        write.getOutputDirectory,
+        tmpDir,
+        write.getFilenameSuffix,
+        write.getFileOperations,
+        numShards
+      )
+      val writeResult = self.applyInternal(sink)
+      ClosedTap(SmbIO.tap(write.getFileOperations, writeResult).apply(self.context))
+    }
+  }
+
   @experimental
   def saveAsSortedBucket(
     write: SortedBucketIO.Write[_, _, T]
