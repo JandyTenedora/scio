@@ -1681,6 +1681,10 @@ lazy val `scio-smb` = project
       "org.apache.parquet" % "parquet-common" % parquetVersion % Provided, // scio-parquet
       "org.apache.parquet" % "parquet-hadoop" % parquetVersion % Provided, // scio-parquet
       "org.tensorflow" % "tensorflow-core-native" % tensorFlowVersion % Provided, // scio-tensorflow
+      "org.apache.iceberg" % "iceberg-api" % icebergVersion % Provided,
+      "org.apache.iceberg" % "iceberg-core" % icebergVersion % Provided,
+      "org.apache.iceberg" % "iceberg-data" % icebergVersion % Provided,
+      "org.apache.iceberg" % "iceberg-parquet" % icebergVersion % Provided,
       // test
       "org.apache.beam" % "beam-sdks-java-core" % beamVersion % Test classifier "tests",
       "org.hamcrest" % "hamcrest" % hamcrestVersion % Test,
