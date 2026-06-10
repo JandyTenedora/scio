@@ -404,8 +404,10 @@ public class IcebergSortedBucketIO {
 
         Map<ResourceId, BucketMetadataUtil.SourceMetadataValue<GenericRecord>> mapping =
             new HashMap<>();
-        ResourceId syntheticDir =
-            FileSystems.matchNewResource("iceberg://" + tableConfig.bucketKeyField(), true);
+        String firstFilePath =
+            tableConfig.bucketToFiles().values().iterator().next().get(0);
+        String baseDir = firstFilePath.substring(0, firstFilePath.lastIndexOf('/'));
+        ResourceId syntheticDir = FileSystems.matchNewResource(baseDir, true);
         mapping.put(
             syntheticDir,
             new BucketMetadataUtil.SourceMetadataValue<>(metadata, fileAssignment));
@@ -429,7 +431,13 @@ public class IcebergSortedBucketIO {
     IcebergFileAssignment(
         Map<Integer, List<String>> bucketToFiles, int numBuckets, int maxShards) {
       super(
-          FileSystems.matchNewResource("iceberg://virtual", true),
+          FileSystems.matchNewResource(
+              bucketToFiles.values().stream()
+                  .flatMap(List::stream)
+                  .findFirst()
+                  .map(p -> p.substring(0, p.lastIndexOf('/')))
+                  .orElse("/tmp/iceberg-smb"),
+              true),
           SortedBucketIO.DEFAULT_FILENAME_PREFIX,
           ".parquet",
           false);

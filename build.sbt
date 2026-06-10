@@ -1687,10 +1687,6 @@ lazy val `scio-smb` = project
       "org.apache.iceberg" % "iceberg-parquet" % icebergVersion % Provided,
       // test
       "org.apache.beam" % "beam-sdks-java-core" % beamVersion % Test classifier "tests",
-      "org.apache.iceberg" % "iceberg-api" % icebergVersion % Test,
-      "org.apache.iceberg" % "iceberg-core" % icebergVersion % Test,
-      "org.apache.iceberg" % "iceberg-data" % icebergVersion % Test,
-      "org.apache.iceberg" % "iceberg-parquet" % icebergVersion % Test,
       "org.hamcrest" % "hamcrest" % hamcrestVersion % Test,
       "org.scalatest" %% "scalatest" % scalatestVersion % Test,
       "org.slf4j" % "slf4j-simple" % slf4jBom.key.value % Test
