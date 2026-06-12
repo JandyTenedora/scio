@@ -45,6 +45,11 @@ import org.apache.beam.vendor.guava.v32_1_2_jre.com.google.common.collect.Immuta
  * bucket(N, column)} partition transform. This means an Iceberg table partitioned with {@code
  * bucket(N, user_id)} produces the same bucket IDs as SMB files written with this metadata, enabling
  * shuffle-free joins between Iceberg tables and standard SMB sources.
+ *
+ * <p>Optionally tracks the Iceberg <b>field ID</b> ({@code icebergFieldId}) for the bucket key
+ * column. The field ID corresponds to Iceberg's internal column ID from the table schema and
+ * survives column renames and other schema evolution operations. When present, downstream code can
+ * resolve the key by ID instead of by name, providing resilience against schema changes.
  */
 public class IcebergBucketMetadata<K1, K2, V extends IndexedRecord>
     extends BucketMetadata<K1, K2, V> {
@@ -54,6 +59,10 @@ public class IcebergBucketMetadata<K1, K2, V extends IndexedRecord>
   @JsonProperty
   @JsonInclude(JsonInclude.Include.NON_NULL)
   private final String keyFieldSecondary;
+
+  @JsonProperty
+  @JsonInclude(JsonInclude.Include.NON_NULL)
+  private final Integer icebergFieldId;
 
   @JsonIgnore private final AtomicReference<int[]> keyPath = new AtomicReference<>();
   @JsonIgnore private final AtomicReference<int[]> keyPathSecondary = new AtomicReference<>();
@@ -67,6 +76,20 @@ public class IcebergBucketMetadata<K1, K2, V extends IndexedRecord>
       String keyFieldSecondary,
       Schema schema)
       throws CannotProvideCoderException, Coder.NonDeterministicException {
+    this(numBuckets, numShards, keyClassPrimary, keyField, keyClassSecondary,
+        keyFieldSecondary, schema, null);
+  }
+
+  public IcebergBucketMetadata(
+      int numBuckets,
+      int numShards,
+      Class<K1> keyClassPrimary,
+      String keyField,
+      Class<K2> keyClassSecondary,
+      String keyFieldSecondary,
+      Schema schema,
+      Integer icebergFieldId)
+      throws CannotProvideCoderException, Coder.NonDeterministicException {
     this(
         BucketMetadata.CURRENT_VERSION,
         numBuckets,
@@ -78,7 +101,8 @@ public class IcebergBucketMetadata<K1, K2, V extends IndexedRecord>
             ? null
             : AvroUtils.validateKeyField(keyFieldSecondary, keyClassSecondary, schema),
         BucketMetadata.serializeHashType(HashType.ICEBERG),
-        SortedBucketIO.DEFAULT_FILENAME_PREFIX);
+        SortedBucketIO.DEFAULT_FILENAME_PREFIX,
+        icebergFieldId);
   }
 
   public IcebergBucketMetadata(
@@ -88,7 +112,18 @@ public class IcebergBucketMetadata<K1, K2, V extends IndexedRecord>
       String keyField,
       Schema schema)
       throws CannotProvideCoderException, Coder.NonDeterministicException {
-    this(numBuckets, numShards, keyClassPrimary, keyField, null, null, schema);
+    this(numBuckets, numShards, keyClassPrimary, keyField, null, null, schema, null);
+  }
+
+  public IcebergBucketMetadata(
+      int numBuckets,
+      int numShards,
+      Class<K1> keyClassPrimary,
+      String keyField,
+      Schema schema,
+      Integer icebergFieldId)
+      throws CannotProvideCoderException, Coder.NonDeterministicException {
+    this(numBuckets, numShards, keyClassPrimary, keyField, null, null, schema, icebergFieldId);
   }
 
   @JsonCreator
@@ -101,7 +136,8 @@ public class IcebergBucketMetadata<K1, K2, V extends IndexedRecord>
       @Nullable @JsonProperty("keyClassSecondary") Class<K2> keyClassSecondary,
       @Nullable @JsonProperty("keyFieldSecondary") String keyFieldSecondary,
       @JsonProperty("hashType") String hashType,
-      @JsonProperty(value = "filenamePrefix", required = false) String filenamePrefix)
+      @JsonProperty(value = "filenamePrefix", required = false) String filenamePrefix,
+      @Nullable @JsonProperty("icebergFieldId") Integer icebergFieldId)
       throws CannotProvideCoderException, Coder.NonDeterministicException {
     super(
         version,
@@ -116,6 +152,7 @@ public class IcebergBucketMetadata<K1, K2, V extends IndexedRecord>
             || (keyClassSecondary == null && keyFieldSecondary == null));
     this.keyField = keyField;
     this.keyFieldSecondary = keyFieldSecondary;
+    this.icebergFieldId = icebergFieldId;
   }
 
   @Override
@@ -167,6 +204,8 @@ public class IcebergBucketMetadata<K1, K2, V extends IndexedRecord>
     builder.add(DisplayData.item("keyFieldPrimary", keyField));
     if (keyFieldSecondary != null)
       builder.add(DisplayData.item("keyFieldSecondary", keyFieldSecondary));
+    if (icebergFieldId != null)
+      builder.add(DisplayData.item("icebergFieldId", icebergFieldId));
     builder.add(DisplayData.item("hashType", "ICEBERG"));
   }
 

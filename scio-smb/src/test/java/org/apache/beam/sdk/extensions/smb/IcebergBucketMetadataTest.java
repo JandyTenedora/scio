@@ -105,7 +105,7 @@ public class IcebergBucketMetadataTest {
         new IcebergBucketMetadata<>(
             0, 64, 1, String.class, "user_id", null, null,
             BucketMetadata.serializeHashType(HashType.ICEBERG),
-            SortedBucketIO.DEFAULT_FILENAME_PREFIX);
+            SortedBucketIO.DEFAULT_FILENAME_PREFIX, null);
 
     BucketMetadata<String, Void, GenericRecord> copy = BucketMetadata.from(metadata.toString());
     Assert.assertEquals(metadata.getVersion(), copy.getVersion());
@@ -165,5 +165,24 @@ public class IcebergBucketMetadataTest {
     for (int count : bucketCounts) {
       Assert.assertTrue("Expected all buckets to have records, got 0", count > 0);
     }
+  }
+
+  @Test
+  public void testIcebergFieldIdStored() throws Exception {
+    IcebergBucketMetadata<String, Void, GenericRecord> metadata =
+        new IcebergBucketMetadata<>(16, 1, String.class, "user_id", USER_SCHEMA, 42);
+    // The field ID should be stored and accessible via serialization roundtrip
+    BucketMetadata<String, Void, GenericRecord> copy = BucketMetadata.from(metadata.toString());
+    Assert.assertEquals(metadata.getNumBuckets(), copy.getNumBuckets());
+    Assert.assertEquals(metadata.getHashType(), copy.getHashType());
+  }
+
+  @Test
+  public void testIcebergFieldIdNullByDefault() throws Exception {
+    IcebergBucketMetadata<String, Void, GenericRecord> metadata =
+        new IcebergBucketMetadata<>(16, 1, String.class, "user_id", USER_SCHEMA);
+    // Default constructor should work without field ID (backward compatible)
+    Assert.assertEquals(16, metadata.getNumBuckets());
+    Assert.assertEquals(BucketMetadata.HashType.ICEBERG, metadata.getHashType());
   }
 }

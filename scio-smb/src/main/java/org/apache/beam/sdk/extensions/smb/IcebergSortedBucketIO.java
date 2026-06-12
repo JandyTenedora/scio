@@ -42,8 +42,12 @@ import org.apache.iceberg.DataFile;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.SortField;
+import org.apache.iceberg.SortOrder;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.io.CloseableIterable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * API for reading and writing Iceberg tables as sorted-bucket files.
@@ -53,6 +57,30 @@ import org.apache.iceberg.io.CloseableIterable;
  * user_id ASC} produces files structurally identical to SMB files: bucketed by hash, sorted within
  * each bucket. This class lets Beam/Scio pipelines read such tables as SMB inputs for zero-shuffle
  * joins with other SMB sources.
+ *
+ * <h3>Iceberg-native metadata</h3>
+ *
+ * <p>This implementation resolves bucket key columns by Iceberg <b>field ID</b> rather than by
+ * name, so it survives column renames and other schema evolution operations. It also validates the
+ * table's {@link SortOrder}: if the sort order does not include the bucket key field, a warning is
+ * logged because merge join correctness depends on data being sorted within each bucket. The
+ * partition spec ID is tracked so that future versions can detect spec evolution (e.g., bucket
+ * count changes).
+ *
+ * <p><b>Compaction requirement:</b> files must be written or compacted with sort order preserved.
+ * If compaction drops the sort order, merge joins will produce incorrect results.
+ *
+ * <h3>Limitations</h3>
+ *
+ * <p>The read path reads Parquet data files directly via {@code ParquetAvroFileOperations},
+ * <b>bypassing Iceberg's delete file handling</b>. Tables with position deletes or equality
+ * deletes (from row-level mutations, CDC writes, or MERGE INTO operations) will return stale
+ * rows that should have been filtered. The read is only safe for <b>append-only tables</b> that
+ * have been fully compacted with sort order preserved.
+ *
+ * <p>Additionally, merge join correctness depends on data being physically sorted within each
+ * bucket. This is verified via the table's declared {@link SortOrder} but cannot be enforced at
+ * read time — if compaction used a non-sort-preserving strategy, results will be silently wrong.
  *
  * <h3>Read example</h3>
  *
@@ -73,6 +101,7 @@ import org.apache.iceberg.io.CloseableIterable;
  * }</pre>
  */
 public class IcebergSortedBucketIO {
+  private static final Logger LOG = LoggerFactory.getLogger(IcebergSortedBucketIO.class);
   private static final String DEFAULT_SUFFIX = ".parquet";
 
   static {
@@ -285,10 +314,27 @@ public class IcebergSortedBucketIO {
 
     abstract String bucketKeyField();
 
+    /** Iceberg field ID for the bucket key column (survives column renames). */
+    abstract int bucketSourceFieldId();
+
+    /** Whether the table's {@link SortOrder} includes the bucket key field. */
+    abstract boolean sortOrderVerified();
+
+    /** The partition spec ID these files belong to. */
+    abstract int partitionSpecId();
+
     abstract Map<Integer, List<String>> bucketToFiles();
 
     static IcebergTableConfig fromTable(Table table, String bucketKeyField) {
       PartitionSpec spec = table.spec();
+
+      // Check for multiple partition specs with different bucket counts
+      if (table.specs().size() > 1) {
+        LOG.warn(
+            "Iceberg table '{}' has {} partition specs. Only the current spec (id={}) is supported. "
+                + "Files from older specs may produce incorrect bucket assignments.",
+            table.name(), table.specs().size(), spec.specId());
+      }
 
       PartitionField bucketField = null;
       for (PartitionField field : spec.fields()) {
@@ -315,9 +361,30 @@ public class IcebergSortedBucketIO {
               transformStr.substring(
                   transformStr.indexOf('[') + 1, transformStr.indexOf(']')));
 
+      // Validate sort order includes the bucket key field
+      SortOrder sortOrder = table.sortOrder();
+      boolean sortVerified = false;
+      if (sortOrder != null && !sortOrder.isUnsorted()) {
+        for (SortField sf : sortOrder.fields()) {
+          if (sf.sourceId() == bucketField.sourceId()) {
+            sortVerified = true;
+            break;
+          }
+        }
+      }
+
       Map<Integer, List<String>> bucketToFiles = new HashMap<>();
       try (CloseableIterable<FileScanTask> tasks = table.newScan().planFiles()) {
         for (FileScanTask task : tasks) {
+          if (!task.deletes().isEmpty()) {
+            throw new UnsupportedOperationException(
+                String.format(
+                    "Iceberg table '%s' has delete files (position or equality deletes). "
+                        + "IcebergSortedBucketIO reads data files directly and cannot apply "
+                        + "delete files. Only append-only tables are supported. "
+                        + "Run compaction to remove delete files before reading.",
+                    table.name()));
+          }
           DataFile dataFile = task.file();
           int bucketId =
               dataFile.partition().get(spec.fields().indexOf(bucketField), Integer.class);
@@ -330,7 +397,8 @@ public class IcebergSortedBucketIO {
       }
 
       return new AutoValue_IcebergSortedBucketIO_IcebergTableConfig(
-          numBuckets, bucketKeyField, bucketToFiles);
+          numBuckets, bucketKeyField, bucketField.sourceId(), sortVerified, spec.specId(),
+          bucketToFiles);
     }
   }
 
@@ -397,7 +465,17 @@ public class IcebergSortedBucketIO {
       try {
         IcebergBucketMetadata<String, Void, GenericRecord> metadata =
             new IcebergBucketMetadata<>(
-                numBuckets, maxFilesPerBucket, String.class, tableConfig.bucketKeyField(), avroSchema);
+                numBuckets, maxFilesPerBucket, String.class, tableConfig.bucketKeyField(),
+                avroSchema, tableConfig.bucketSourceFieldId());
+
+        if (!tableConfig.sortOrderVerified()) {
+          LOG.warn(
+              "CORRECTNESS RISK: Iceberg table does not declare a sort order including the "
+                  + "bucket key '{}'. Merge joins REQUIRE data sorted within each bucket — "
+                  + "unsorted data will produce silently wrong results. Set a SortOrder on the "
+                  + "table and use sort-preserving compaction.",
+              tableConfig.bucketKeyField());
+        }
 
         IcebergFileAssignment fileAssignment =
             new IcebergFileAssignment(tableConfig.bucketToFiles(), numBuckets, maxFilesPerBucket);

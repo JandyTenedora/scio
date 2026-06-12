@@ -71,13 +71,13 @@ public class IcebergSortedBucketIOTest {
   @Test
   public void testBucketedInputFromConfig() {
     Map<Integer, List<String>> bucketToFiles = new HashMap<>();
-    bucketToFiles.put(0, Arrays.asList("gs://bucket/data/b0/file1.parquet"));
-    bucketToFiles.put(1, Arrays.asList("gs://bucket/data/b1/file1.parquet",
-                                        "gs://bucket/data/b1/file2.parquet"));
-    bucketToFiles.put(3, Arrays.asList("gs://bucket/data/b3/file1.parquet"));
+    bucketToFiles.put(0, Arrays.asList("/tmp/iceberg/data/b0/file1.parquet"));
+    bucketToFiles.put(1, Arrays.asList("/tmp/iceberg/data/b1/file1.parquet",
+                                        "/tmp/iceberg/data/b1/file2.parquet"));
+    bucketToFiles.put(3, Arrays.asList("/tmp/iceberg/data/b3/file1.parquet"));
 
     IcebergSortedBucketIO.IcebergTableConfig config =
-        new AutoValue_IcebergSortedBucketIO_IcebergTableConfig(4, "user_id", bucketToFiles);
+        new AutoValue_IcebergSortedBucketIO_IcebergTableConfig(4, "user_id", 1, true, 0, bucketToFiles);
 
     TupleTag<GenericRecord> tag = new TupleTag<>("users");
     IcebergSortedBucketIO.IcebergBucketedInput input =
@@ -92,10 +92,10 @@ public class IcebergSortedBucketIOTest {
   @Test
   public void testFileAssignmentResolvesCorrectPaths() {
     Map<Integer, List<String>> bucketToFiles = new HashMap<>();
-    bucketToFiles.put(0, Arrays.asList("gs://bucket/data/b0/file1.parquet"));
-    bucketToFiles.put(1, Arrays.asList("gs://bucket/data/b1/file1.parquet",
-                                        "gs://bucket/data/b1/file2.parquet"));
-    bucketToFiles.put(2, Arrays.asList("gs://bucket/data/b2/file1.parquet"));
+    bucketToFiles.put(0, Arrays.asList("/tmp/iceberg/data/b0/file1.parquet"));
+    bucketToFiles.put(1, Arrays.asList("/tmp/iceberg/data/b1/file1.parquet",
+                                        "/tmp/iceberg/data/b1/file2.parquet"));
+    bucketToFiles.put(2, Arrays.asList("/tmp/iceberg/data/b2/file1.parquet"));
 
     IcebergSortedBucketIO.IcebergFileAssignment assignment =
         new IcebergSortedBucketIO.IcebergFileAssignment(bucketToFiles, 4, 2);
@@ -120,7 +120,7 @@ public class IcebergSortedBucketIOTest {
   @Test
   public void testFileAssignmentFallsBackForMissingBuckets() {
     Map<Integer, List<String>> bucketToFiles = new HashMap<>();
-    bucketToFiles.put(0, Arrays.asList("gs://bucket/data/b0/file1.parquet"));
+    bucketToFiles.put(0, Arrays.asList("/tmp/iceberg/data/b0/file1.parquet"));
 
     IcebergSortedBucketIO.IcebergFileAssignment assignment =
         new IcebergSortedBucketIO.IcebergFileAssignment(bucketToFiles, 4, 1);
@@ -133,7 +133,7 @@ public class IcebergSortedBucketIOTest {
   @Test
   public void testFileAssignmentFallsBackForExcessShards() {
     Map<Integer, List<String>> bucketToFiles = new HashMap<>();
-    bucketToFiles.put(0, Arrays.asList("gs://bucket/data/b0/file1.parquet"));
+    bucketToFiles.put(0, Arrays.asList("/tmp/iceberg/data/b0/file1.parquet"));
 
     IcebergSortedBucketIO.IcebergFileAssignment assignment =
         new IcebergSortedBucketIO.IcebergFileAssignment(bucketToFiles, 4, 2);
@@ -149,7 +149,7 @@ public class IcebergSortedBucketIOTest {
     bucketToFiles.put(0, Arrays.asList("/data/file.parquet"));
 
     IcebergSortedBucketIO.IcebergTableConfig config =
-        new AutoValue_IcebergSortedBucketIO_IcebergTableConfig(256, "event_id", bucketToFiles);
+        new AutoValue_IcebergSortedBucketIO_IcebergTableConfig(256, "event_id", 5, true, 0, bucketToFiles);
 
     Assert.assertEquals(256, config.numBuckets());
     Assert.assertEquals("event_id", config.bucketKeyField());
@@ -162,7 +162,7 @@ public class IcebergSortedBucketIOTest {
     bucketToFiles.put(0, Arrays.asList("/tmp/data/file.parquet"));
 
     IcebergSortedBucketIO.IcebergTableConfig config =
-        new AutoValue_IcebergSortedBucketIO_IcebergTableConfig(16, "user_id", bucketToFiles);
+        new AutoValue_IcebergSortedBucketIO_IcebergTableConfig(16, "user_id", 1, true, 0, bucketToFiles);
 
     TupleTag<GenericRecord> tag = new TupleTag<>("test");
     IcebergSortedBucketIO.IcebergBucketedInput input =
@@ -175,5 +175,31 @@ public class IcebergSortedBucketIOTest {
 
     Assert.assertEquals(BucketMetadata.HashType.ICEBERG, metadata.getHashType());
     Assert.assertEquals(16, metadata.getNumBuckets());
+  }
+
+  @Test
+  public void testConfigIncludesFieldIdAndSortOrder() {
+    Map<Integer, List<String>> bucketToFiles = new HashMap<>();
+    bucketToFiles.put(0, Arrays.asList("/data/file.parquet"));
+
+    IcebergSortedBucketIO.IcebergTableConfig config =
+        new AutoValue_IcebergSortedBucketIO_IcebergTableConfig(256, "event_id", 5, true, 0, bucketToFiles);
+
+    Assert.assertEquals(256, config.numBuckets());
+    Assert.assertEquals("event_id", config.bucketKeyField());
+    Assert.assertEquals(5, config.bucketSourceFieldId());
+    Assert.assertTrue(config.sortOrderVerified());
+    Assert.assertEquals(0, config.partitionSpecId());
+  }
+
+  @Test
+  public void testConfigSortOrderNotVerified() {
+    Map<Integer, List<String>> bucketToFiles = new HashMap<>();
+    bucketToFiles.put(0, Arrays.asList("/data/file.parquet"));
+
+    IcebergSortedBucketIO.IcebergTableConfig config =
+        new AutoValue_IcebergSortedBucketIO_IcebergTableConfig(16, "user_id", 1, false, 0, bucketToFiles);
+
+    Assert.assertFalse(config.sortOrderVerified());
   }
 }
